@@ -1,7 +1,8 @@
 # Analyses de sécurité : secrets (Gitleaks), code (Semgrep), dépendances et configuration (Trivy).
 # Chaque analyse fait échouer la CI si elle trouve quelque chose.
-# Sur main, les résultats partent aussi vers DefectDojo quand le dépôt définit la variable
-# DEFECTDOJO_URL et le secret DEFECTDOJO_JETON ; sinon l'envoi est sauté.
+# Sur main, les résultats partent aussi vers SecObserve (variable SECOBSERVE_URL, secret SECOBSERVE_JETON)
+# et vers DefectDojo (variable DEFECTDOJO_URL, secret DEFECTDOJO_JETON) quand le dépôt les définit ;
+# sinon l'envoi correspondant est sauté.
 name: securite
 
 on:
@@ -13,6 +14,7 @@ on:
 
 env:
   DD_URL: ${{ vars.DEFECTDOJO_URL }}
+  SO_URL: ${{ vars.SECOBSERVE_URL }}
 
 jobs:
   gitleaks:
@@ -22,6 +24,7 @@ jobs:
       image: zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
     env:
       TYPE_DD: Gitleaks Scan
+      RAPPORT_SO: rapport.json
     defaults:
       run:
         shell: sh
@@ -42,6 +45,21 @@ jobs:
         id: analyse
         continue-on-error: true
         run: gitleaks git --redact --no-banner -v --report-format json --report-path rapport.json .
+      - &envoi_so
+        name: Envoi à SecObserve
+        if: always() && github.event_name != 'pull_request' && github.ref_name == 'main' && env.SO_URL != ''
+        env:
+          SO_JETON: ${{ secrets.SECOBSERVE_JETON }}
+        run: |
+          set -eu
+          command -v curl >/dev/null || apk add -q --no-cache curl
+          umask 077
+          printf 'header = "Authorization: APIToken %s"\n' "$SO_JETON" > /tmp/so.cfg
+          curl -sS --fail-with-body -o /tmp/so.txt -K /tmp/so.cfg "$SO_URL/api/import/file_upload_observations_by_name/" \
+            -F "file=@$RAPPORT_SO" -F "product_name=$GITHUB_REPOSITORY" -F "branch_name=$GITHUB_REF_NAME" \
+            || { cat /tmp/so.txt; rm -f /tmp/so.cfg; exit 1; }
+          rm -f /tmp/so.cfg
+          echo "Envoyé à SecObserve : $RAPPORT_SO ($(cat /tmp/so.txt))"
       - &envoi
         name: Envoi à DefectDojo
         if: always() && github.event_name != 'pull_request' && github.ref_name == 'main' && env.DD_URL != ''
@@ -75,6 +93,7 @@ jobs:
       image: semgrep/semgrep:1.178.0@sha256:32e459968daabe7ab86968184a29109b9564aa00392401156f9788452b42786b
     env:
       TYPE_DD: Semgrep JSON Report
+      RAPPORT_SO: rapport.sarif
     defaults:
       run:
         shell: sh
@@ -83,7 +102,8 @@ jobs:
       - name: Analyse du code (règles p/default)
         id: analyse
         continue-on-error: true
-        run: semgrep scan --config p/default --metrics=off --error --json-output=rapport.json
+        run: semgrep scan --config p/default --metrics=off --error --json-output=rapport.json --sarif-output=rapport.sarif
+      - *envoi_so
       - *envoi
       - *verdict
 
@@ -94,6 +114,7 @@ jobs:
       image: aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
     env:
       TYPE_DD: Trivy Scan
+      RAPPORT_SO: rapport.sarif
     defaults:
       run:
         shell: sh
@@ -105,6 +126,8 @@ jobs:
         run: |
           set -eu
           trivy fs --quiet --scanners vuln,secret,misconfig --format json --output rapport.json .
+          trivy convert --quiet --format sarif --output rapport.sarif rapport.json
           trivy fs --quiet --skip-db-update --scanners vuln,secret,misconfig --severity HIGH,CRITICAL --exit-code 1 .
+      - *envoi_so
       - *envoi
       - *verdict
