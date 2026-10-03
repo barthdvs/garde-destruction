@@ -443,6 +443,8 @@ async function reglesPerso($: EngineInterface, maison: string | undefined): Prom
     if (ligne === '' || ligne.startsWith('#')) continue
     const m = /^(refus|demande)\s*:\s*(.+)$/.exec(ligne)
     try {
+      // Expression écrite par l'utilisateur dans son propre fichier de règles : c'est le but de ce fichier.
+      // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
       res.push({ niveau: m?.[1] === 'refus' ? 'refus' : 'demande', motif: new RegExp(m?.[2] ?? ligne) })
     } catch {
       // règle invalide : ignorée
