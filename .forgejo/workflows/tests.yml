@@ -1,0 +1,25 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tests:
+    name: Secours Python et module
+    runs-on: docker
+    container:
+      image: node:24-bookworm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Banc d'essai du secours Python
+        run: python3 plugins/garde-destruction/tests/cas.py
+      - name: Installer Claude Code
+        run: npm install --global @anthropic-ai/claude-code
+      - name: Valider la place de marché et le plugin
+        run: |
+          claude plugin validate .
+          claude plugin validate plugins/garde-destruction
+      - name: Banc d'essai du module
+        run: claude plugin test plugins/garde-destruction

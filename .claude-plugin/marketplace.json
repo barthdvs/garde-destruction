@@ -1,0 +1,14 @@
+{
+  "name": "garde-destruction",
+  "description": "Plugin Claude Code qui retient les commandes destructrices",
+  "owner": {
+    "name": "barthdvs"
+  },
+  "plugins": [
+    {
+      "name": "garde-destruction",
+      "source": "./plugins/garde-destruction",
+      "description": "Soumet à confirmation les commandes qui détruisent (terraform destroy, gcloud delete, git reset --hard…) et refuse les pires"
+    }
+  ]
+}

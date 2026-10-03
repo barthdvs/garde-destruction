@@ -1,0 +1,9 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "garde-destruction",
+  "version": "1.0.0",
+  "description": "Soumet à ta confirmation les commandes qui détruisent (terraform destroy et apply, gcloud delete, git reset --hard, docker volume rm, rm -rf large…) et refuse celles qui détruisent trop large ou sans confirmation possible.",
+  "author": {
+    "name": "barthdvs"
+  }
+}
