@@ -8,6 +8,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # bouton « Lancer » dans l'onglet Actions
+  workflow_dispatch:
 
 env:
   DD_URL: ${{ vars.DEFECTDOJO_URL }}
@@ -42,7 +44,7 @@ jobs:
         run: gitleaks git --redact --no-banner -v --report-format json --report-path rapport.json .
       - &envoi
         name: Envoi à DefectDojo
-        if: always() && github.event_name == 'push' && env.DD_URL != ''
+        if: always() && github.event_name != 'pull_request' && github.ref_name == 'main' && env.DD_URL != ''
         env:
           DD_JETON: ${{ secrets.DEFECTDOJO_JETON }}
         run: |
