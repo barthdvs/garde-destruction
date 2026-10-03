@@ -1,7 +1,12 @@
 # Analyses de sécurité : secrets (Gitleaks), code (Semgrep), dépendances et configuration (Trivy).
 # Chaque analyse fait échouer la CI si elle trouve quelque chose.
 # Sur main, les rapports (SARIF) partent aussi vers SecObserve quand le dépôt définit la variable
-# SECOBSERVE_URL et le secret SECOBSERVE_JETON ; sinon l'envoi est sauté.
+# SECOBSERVE_URL et le secret SECOBSERVE_JETON ; sinon l'envoi est sauté. Chaque analyse envoie
+# un fichier de nom différent : SecObserve regroupe les constats par nom de fichier, et un nom
+# commun ferait « résoudre » ceux d'une analyse par l'envoi suivant.
+# Trivy produit aussi l'inventaire des dépendances (SBOM CycloneDX), envoyé à SecObserve sur main.
+# Sur une demande de fusion, le job « resume » y dépose un commentaire de synthèse (un seul,
+# mis à jour à chaque exécution).
 name: securite
 
 on:
@@ -18,6 +23,10 @@ jobs:
   gitleaks:
     name: Secrets (Gitleaks)
     runs-on: docker
+    env:
+      RAPPORT: gitleaks.sarif
+    outputs: &sorties
+      constats: ${{ steps.compte.outputs.n }}
     container:
       image: zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
     defaults:
@@ -42,7 +51,22 @@ jobs:
         run: |
           set -eu
           # SARIF : SecObserve ne reconnaît pas un rapport Gitleaks JSON vide
-          gitleaks git --redact --no-banner -v --report-format sarif --report-path rapport.sarif .
+          gitleaks git --redact --no-banner -v --report-format sarif --report-path "$RAPPORT" .
+      - &compte
+        name: Nombre de constats
+        id: compte
+        if: always()
+        run: |
+          # entrées « results » du SARIF, hors constats écartés dans le code (« suppressions »,
+          # ex. commentaire nosemgrep) ; python3 si l'image l'a, sinon jq
+          if command -v python3 >/dev/null; then
+            n=$(python3 -c 'import json,sys; print(sum(1 for r in json.load(open(sys.argv[1]))["runs"] for x in r.get("results") or [] if not x.get("suppressions")))' "$RAPPORT") || n='?'
+          else
+            command -v jq >/dev/null || apk add -q --no-cache jq
+            n=$(jq '[.runs[].results[]? | select((.suppressions // []) | length == 0)] | length' "$RAPPORT") || n='?'
+          fi
+          echo "constats : $n"
+          echo "n=$n" >> "$GITHUB_OUTPUT"
       - &envoi_so
         name: Envoi à SecObserve
         if: always() && github.event_name != 'pull_request' && github.ref_name == 'main' && env.SO_URL != ''
@@ -54,7 +78,7 @@ jobs:
           umask 077
           printf 'header = "Authorization: APIToken %s"\n' "$SO_JETON" > /tmp/so.cfg
           curl -sS --fail-with-body -o /tmp/so.txt -K /tmp/so.cfg "$SO_URL/api/import/file_upload_observations_by_name/" \
-            -F "file=@rapport.sarif" -F "product_name=$GITHUB_REPOSITORY" -F "branch_name=$GITHUB_REF_NAME" \
+            -F "file=@$RAPPORT" -F "product_name=$GITHUB_REPOSITORY" -F "branch_name=$GITHUB_REF_NAME" \
             || { cat /tmp/so.txt; rm -f /tmp/so.cfg; exit 1; }
           rm -f /tmp/so.cfg
           echo "Envoyé à SecObserve : $(cat /tmp/so.txt)"
@@ -68,6 +92,9 @@ jobs:
   semgrep:
     name: Code (Semgrep)
     runs-on: docker
+    env:
+      RAPPORT: semgrep.sarif
+    outputs: *sorties
     container:
       image: semgrep/semgrep:1.178.0@sha256:32e459968daabe7ab86968184a29109b9564aa00392401156f9788452b42786b
     defaults:
@@ -78,13 +105,17 @@ jobs:
       - name: Analyse du code (règles p/default)
         id: analyse
         continue-on-error: true
-        run: semgrep scan --config p/default --metrics=off --error --sarif-output=rapport.sarif
+        run: semgrep scan --config p/default --metrics=off --error --sarif-output="$RAPPORT"
+      - *compte
       - *envoi_so
       - *verdict
 
   trivy:
     name: Dépendances et configuration (Trivy)
     runs-on: docker
+    env:
+      RAPPORT: trivy.sarif
+    outputs: *sorties
     container:
       image: aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
     defaults:
@@ -97,7 +128,89 @@ jobs:
         continue-on-error: true
         run: |
           set -eu
-          trivy fs --quiet --scanners vuln,secret,misconfig --format sarif --output rapport.sarif .
+          trivy fs --quiet --scanners vuln,secret,misconfig --format sarif --output "$RAPPORT" .
           trivy fs --quiet --skip-db-update --scanners vuln,secret,misconfig --severity HIGH,CRITICAL --exit-code 1 .
+      - *compte
       - *envoi_so
+      - name: Inventaire des dépendances (SBOM CycloneDX)
+        id: sbom
+        continue-on-error: true
+        run: |
+          set -eu
+          trivy fs --quiet --skip-db-update --scanners vuln --format cyclonedx --output sbom.cdx.json .
+          echo "composants : $(grep -o '"bom-ref"' sbom.cdx.json | wc -l | tr -d ' ')"
+      - name: Envoi de l'inventaire à SecObserve
+        if: steps.sbom.outcome == 'success' && github.event_name != 'pull_request' && github.ref_name == 'main' && env.SO_URL != ''
+        continue-on-error: true
+        env:
+          SO_JETON: ${{ secrets.SECOBSERVE_JETON }}
+        run: |
+          set -eu
+          command -v curl >/dev/null || apk add -q --no-cache curl
+          umask 077
+          printf 'header = "Authorization: APIToken %s"\n' "$SO_JETON" > /tmp/so.cfg
+          curl -sS --fail-with-body -o /tmp/so.txt -K /tmp/so.cfg "$SO_URL/api/import/file_upload_sbom_by_name/" \
+            -F "file=@sbom.cdx.json" -F "product_name=$GITHUB_REPOSITORY" -F "branch_name=$GITHUB_REF_NAME" \
+            || { cat /tmp/so.txt; rm -f /tmp/so.cfg; exit 1; }
+          rm -f /tmp/so.cfg
+          echo "Inventaire envoyé à SecObserve : $(cat /tmp/so.txt)"
       - *verdict
+
+  # Synthèse en commentaire de la demande de fusion (jeton automatique du job, aucun secret).
+  resume:
+    name: Synthèse dans la demande de fusion
+    needs: [gitleaks, semgrep, trivy]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: docker
+    container:
+      image: alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+    defaults:
+      run:
+        shell: sh
+    steps:
+      - name: Commentaire de synthèse
+        env:
+          JETON_DEPOT: ${{ github.token }}
+          NUMERO: ${{ github.event.pull_request.number }}
+          COMMIT: ${{ github.event.pull_request.head.sha }}
+          R_GITLEAKS: ${{ needs.gitleaks.result }}
+          R_SEMGREP: ${{ needs.semgrep.result }}
+          R_TRIVY: ${{ needs.trivy.result }}
+          N_GITLEAKS: ${{ needs.gitleaks.outputs.constats }}
+          N_SEMGREP: ${{ needs.semgrep.outputs.constats }}
+          N_TRIVY: ${{ needs.trivy.outputs.constats }}
+        run: |
+          set -eu
+          apk add -q --no-cache curl jq
+          etat() { case "$1" in success) echo "✅ rien de bloquant";; failure) echo "❌ à corriger";; *) echo "⚠️ $1";; esac; }
+          MARQUE='<!-- resume-securite -->'
+          {
+            echo "$MARQUE"
+            echo "### Analyses de sécurité"
+            echo
+            echo "| Analyse | Résultat | Constats (tous niveaux) |"
+            echo "|---|---|---|"
+            echo "| Secrets (Gitleaks) | $(etat "$R_GITLEAKS") | ${N_GITLEAKS:-?} |"
+            echo "| Code (Semgrep) | $(etat "$R_SEMGREP") | ${N_SEMGREP:-?} |"
+            echo "| Dépendances et configuration (Trivy) | $(etat "$R_TRIVY") | ${N_TRIVY:-?} |"
+            echo
+            echo "Commit ${COMMIT%"${COMMIT#???????}"} — détail : $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_NUMBER"
+          } > corps.md
+          umask 077
+          printf 'header = "Authorization: token %s"\n' "$JETON_DEPOT" > /tmp/api.cfg
+          API="$GITHUB_SERVER_URL/api/v1/repos/$GITHUB_REPOSITORY"
+          # un seul commentaire par demande : on reprend celui qui porte la marque s'il existe
+          ID=$(curl -sS --fail -K /tmp/api.cfg "$API/issues/$NUMERO/comments?limit=50" \
+            | jq -r --arg m "$MARQUE" '[.[] | select(.body | startswith($m))][0].id // empty')
+          jq -Rs '{body: .}' corps.md > corps.json
+          if [ -n "$ID" ]; then
+            curl -sS --fail-with-body -o /dev/null -K /tmp/api.cfg -X PATCH -H 'Content-Type: application/json' \
+              --data @corps.json "$API/issues/comments/$ID" || { rm -f /tmp/api.cfg; exit 1; }
+            echo "commentaire $ID mis à jour"
+          else
+            curl -sS --fail-with-body -o /dev/null -K /tmp/api.cfg -X POST -H 'Content-Type: application/json' \
+              --data @corps.json "$API/issues/$NUMERO/comments" || { rm -f /tmp/api.cfg; exit 1; }
+            echo "commentaire créé"
+          fi
+          rm -f /tmp/api.cfg
+          cat corps.md
