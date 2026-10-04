@@ -162,6 +162,34 @@ export const CAS = {
   [
    "PowerShell",
    "rm -r -fo $env:USERPROFILE"
+  ],
+  [
+   "Bash",
+   "kubectl delete ns --all"
+  ],
+  [
+   "Bash",
+   "kubectl delete pvc --all -n prod"
+  ],
+  [
+   "Bash",
+   "kubectl delete crd --all"
+  ],
+  [
+   "Bash",
+   "kubectl delete pods --all -A"
+  ],
+  [
+   "Bash",
+   "ssh admin@bastion 'kubectl delete pv --all'"
+  ],
+  [
+   "Bash",
+   "az group delete --name rg-prod"
+  ],
+  [
+   "Bash",
+   "az vm delete -g rg -n vm1 --yes"
   ]
  ],
  "demande": [
@@ -464,6 +492,238 @@ export const CAS = {
   [
    "PowerShell",
    "Remove-Item -Recurse *"
+  ],
+  [
+   "Bash",
+   "kubectl delete pod web-1"
+  ],
+  [
+   "Bash",
+   "kubectl -n prod delete deployment appli"
+  ],
+  [
+   "Bash",
+   "kubectl delete -f manifeste.yaml"
+  ],
+  [
+   "Bash",
+   "kubectl delete namespace essai"
+  ],
+  [
+   "Bash",
+   "kubectl delete pvc donnees-postgres -n prod"
+  ],
+  [
+   "Bash",
+   "kubectl delete crd certificates.cert-manager.io"
+  ],
+  [
+   "Bash",
+   "kubectl delete pods --all -n essai"
+  ],
+  [
+   "Bash",
+   "kubectl --context prod delete svc/web"
+  ],
+  [
+   "Bash",
+   "sudo kubectl delete ns essai"
+  ],
+  [
+   "Bash",
+   "helm uninstall appli -n prod"
+  ],
+  [
+   "Bash",
+   "helm -n prod delete appli"
+  ],
+  [
+   "Bash",
+   "ssh admin@bastion 'helm uninstall appli'"
+  ],
+  [
+   "Bash",
+   "flux delete kustomization appli"
+  ],
+  [
+   "Bash",
+   "flux uninstall"
+  ],
+  [
+   "Bash",
+   "restic forget --keep-last 7"
+  ],
+  [
+   "Bash",
+   "restic -r s3:https://s3.example.com/sauvegardes forget --keep-daily 7 --prune"
+  ],
+  [
+   "Bash",
+   "restic prune"
+  ],
+  [
+   "Bash",
+   "RESTIC_REPOSITORY=/srv/depot restic forget abc123"
+  ],
+  [
+   "Bash",
+   "docker exec sauvegarde restic forget --prune --keep-last 3"
+  ],
+  [
+   "Bash",
+   "sh -c 'restic prune'"
+  ],
+  [
+   "Bash",
+   "aws s3 rm s3://seau/fichier.txt"
+  ],
+  [
+   "Bash",
+   "aws s3 rm s3://seau/dossier --recursive"
+  ],
+  [
+   "Bash",
+   "aws --profile prod s3 rb s3://seau --force"
+  ],
+  [
+   "Bash",
+   "aws s3 sync . s3://seau/site --delete"
+  ],
+  [
+   "Bash",
+   "aws s3api delete-bucket --bucket seau"
+  ],
+  [
+   "Bash",
+   "aws ec2 terminate-instances --instance-ids i-0123456789abcdef0"
+  ],
+  [
+   "Bash",
+   "aws rds delete-db-instance --db-instance-identifier base"
+  ],
+  [
+   "Bash",
+   "az storage blob delete-batch --source conteneur --account-name compte"
+  ],
+  [
+   "Bash",
+   "az vm delete -g rg -n vm1"
+  ],
+  [
+   "Bash",
+   "rclone delete distant:sauvegardes/vieux"
+  ],
+  [
+   "Bash",
+   "rclone purge distant:seau/dossier"
+  ],
+  [
+   "Bash",
+   "rclone deletefile distant:seau/a.txt"
+  ],
+  [
+   "Bash",
+   "rclone rmdirs distant:seau/vide"
+  ],
+  [
+   "Bash",
+   "rclone sync ./site distant:seau/site"
+  ],
+  [
+   "Bash",
+   "mc rm --recursive --force minio/seau/dossier"
+  ],
+  [
+   "Bash",
+   "mc rb minio/seau"
+  ],
+  [
+   "Bash",
+   "mc mirror --remove ./site minio/seau"
+  ],
+  [
+   "Bash",
+   "s3cmd del s3://seau/fichier.txt"
+  ],
+  [
+   "Bash",
+   "s3cmd rb s3://seau"
+  ],
+  [
+   "Bash",
+   "s3cmd sync --delete-removed ./site s3://seau/"
+  ],
+  [
+   "Bash",
+   "curl -X DELETE https://api.example.com/v1/objets/42"
+  ],
+  [
+   "Bash",
+   "curl -sS -XDELETE https://api.example.com/v1/objets/42"
+  ],
+  [
+   "Bash",
+   "curl --request DELETE https://api.example.com/v1/objets/42"
+  ],
+  [
+   "Bash",
+   "curl --request=delete https://api.example.com/v1/objets/42"
+  ],
+  [
+   "Bash",
+   "curl -H 'Authorization: Bearer $T' -X DELETE https://api.example.com/v1/objets/42 | jq ."
+  ],
+  [
+   "Bash",
+   "wget --method=DELETE -O- https://api.example.com/v1/objets/42"
+  ],
+  [
+   "Bash",
+   "wget --method DELETE https://api.example.com/v1/objets/42"
+  ],
+  [
+   "Bash",
+   "http DELETE https://api.example.com/v1/objets/42"
+  ],
+  [
+   "Bash",
+   "https -a moi:mdp DELETE api.example.com/v1/objets/42"
+  ],
+  [
+   "Bash",
+   "ssh hote 'curl -X DELETE http://localhost:9200/index'"
+  ],
+  [
+   "Bash",
+   "docker exec web curl -X DELETE http://localhost/api/cache"
+  ],
+  [
+   "Bash",
+   "zfs destroy tank/donnees"
+  ],
+  [
+   "Bash",
+   "zfs destroy -r tank/donnees"
+  ],
+  [
+   "Bash",
+   "sudo zpool destroy tank"
+  ],
+  [
+   "Bash",
+   "lvremove /dev/vg0/donnees"
+  ],
+  [
+   "Bash",
+   "sudo vgremove vg0"
+  ],
+  [
+   "Bash",
+   "pvremove /dev/sdb1"
+  ],
+  [
+   "Bash",
+   "ssh hote 'sudo lvremove -y /dev/vg0/donnees'"
   ]
  ],
  "passe": [
@@ -794,26 +1054,226 @@ export const CAS = {
   [
    "PowerShell",
    "terraform plan"
+  ],
+  [
+   "Bash",
+   "kubectl get ns"
+  ],
+  [
+   "Bash",
+   "kubectl describe pvc donnees"
+  ],
+  [
+   "Bash",
+   "kubectl apply -f manifeste.yaml"
+  ],
+  [
+   "Bash",
+   "kubectl delete pod web-1 --dry-run=client"
+  ],
+  [
+   "Bash",
+   "kubectl delete ns essai --dry-run=server -o yaml"
+  ],
+  [
+   "Bash",
+   "kubectl -n prod exec -it web-1 -- ls /"
+  ],
+  [
+   "Bash",
+   "kubectl logs deploy/appli"
+  ],
+  [
+   "Bash",
+   "helm list -A"
+  ],
+  [
+   "Bash",
+   "helm upgrade --install appli ./chart -n prod"
+  ],
+  [
+   "Bash",
+   "helm uninstall appli --dry-run"
+  ],
+  [
+   "Bash",
+   "flux get kustomizations"
+  ],
+  [
+   "Bash",
+   "flux reconcile kustomization appli"
+  ],
+  [
+   "Bash",
+   "restic snapshots"
+  ],
+  [
+   "Bash",
+   "restic -r /srv/depot check"
+  ],
+  [
+   "Bash",
+   "restic backup /home"
+  ],
+  [
+   "Bash",
+   "restic forget --keep-last 7 --dry-run"
+  ],
+  [
+   "Bash",
+   "restic forget -n --prune --keep-daily 7"
+  ],
+  [
+   "Bash",
+   "aws s3 ls s3://seau"
+  ],
+  [
+   "Bash",
+   "aws s3 cp fichier.txt s3://seau/"
+  ],
+  [
+   "Bash",
+   "aws s3 sync . s3://seau/site"
+  ],
+  [
+   "Bash",
+   "aws s3 rm s3://seau/dossier --recursive --dryrun"
+  ],
+  [
+   "Bash",
+   "aws ec2 describe-instances"
+  ],
+  [
+   "Bash",
+   "aws ec2 terminate-instances --instance-ids i-0123456789abcdef0 --dry-run"
+  ],
+  [
+   "Bash",
+   "aws s3 cp delete-moi.txt s3://seau/"
+  ],
+  [
+   "Bash",
+   "az vm list -o table"
+  ],
+  [
+   "Bash",
+   "az group show --name rg"
+  ],
+  [
+   "Bash",
+   "rclone copy ./site distant:seau/site"
+  ],
+  [
+   "Bash",
+   "rclone ls distant:seau"
+  ],
+  [
+   "Bash",
+   "rclone sync ./site distant:seau/site --dry-run"
+  ],
+  [
+   "Bash",
+   "rclone purge -n distant:seau/dossier"
+  ],
+  [
+   "Bash",
+   "mc ls minio/seau"
+  ],
+  [
+   "Bash",
+   "mc cp fichier.txt minio/seau/"
+  ],
+  [
+   "Bash",
+   "mc mirror ./site minio/seau"
+  ],
+  [
+   "Bash",
+   "s3cmd ls s3://seau"
+  ],
+  [
+   "Bash",
+   "s3cmd sync ./site s3://seau/"
+  ],
+  [
+   "Bash",
+   "curl -X GET https://api.example.com/v1/objets"
+  ],
+  [
+   "Bash",
+   "curl -sS https://api.example.com/v1/objets/42"
+  ],
+  [
+   "Bash",
+   "curl -X POST -d '{\"a\":1}' https://api.example.com/v1/objets"
+  ],
+  [
+   "Bash",
+   "curl https://api.example.com/v1/delete-preview"
+  ],
+  [
+   "Bash",
+   "wget https://example.com/archive.tar.gz"
+  ],
+  [
+   "Bash",
+   "http GET https://api.example.com/v1/objets"
+  ],
+  [
+   "Bash",
+   "http https://api.example.com/v1/objets/delete"
+  ],
+  [
+   "Bash",
+   "zfs list"
+  ],
+  [
+   "Bash",
+   "zfs snapshot tank/donnees@avant"
+  ],
+  [
+   "Bash",
+   "zfs destroy -n tank/donnees@vieux"
+  ],
+  [
+   "Bash",
+   "zpool status"
+  ],
+  [
+   "Bash",
+   "lvs"
+  ],
+  [
+   "Bash",
+   "lvcreate -L 10G -n donnees vg0"
+  ],
+  [
+   "Bash",
+   "systemctl stop appli"
+  ],
+  [
+   "Bash",
+   "docker rm -f web"
   ]
  ],
  "refusPerso": [
   [
    "Bash",
-   "helm uninstall appli"
+   "dropdb appli"
   ],
   [
    "Bash",
-   "sudo helm uninstall appli -n prod"
+   "sudo -u postgres dropdb appli"
   ]
  ],
  "demandePerso": [
   [
    "Bash",
-   "kubectl delete pod x"
+   "psql -d appli -c 'DROP TABLE essai'"
   ],
   [
    "Bash",
-   "ssh hote 'kubectl delete ns essai'"
+   "ssh hote 'mysql -e \"TRUNCATE journal\"'"
   ]
  ]
 }

@@ -45,7 +45,7 @@ with tempfile.TemporaryDirectory() as d:
     vide = os.path.join(d, "absent.txt")  # aucune règle personnelle
     perso = os.path.join(d, "regles.txt")
     with open(perso, "w", encoding="utf-8") as f:
-        f.write("# essai\nkubectl delete\nrefus: helm uninstall\n(règle invalide\n")
+        f.write("# essai\n(psql|mysql).*(DROP|TRUNCATE)\nrefus: dropdb\n(règle invalide\n")
     for voulu in ("refus", "demande", "passe"):
         for outil, c in CAS[voulu]: attendu(voulu, outil, c, vide, hors)
     for outil, c in CAS["refusPerso"]: attendu("refus", outil, c, perso, hors, "règle personnelle")

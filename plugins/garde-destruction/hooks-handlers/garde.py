@@ -7,10 +7,12 @@ ici l'est aussi là-bas, et tests/cas-communs.ts vérifie les deux.
 
 Examine, AVANT exécution, chaque commande shell :
   - celle qui détruit quelque chose est soumise à la confirmation de l'utilisateur
-    (`terraform destroy`, `terraform apply`, `gcloud … delete`, `git reset --hard`, `docker volume rm`…) ;
+    (`terraform destroy`, `terraform apply`, `gcloud … delete`, `git reset --hard`, `docker volume rm`,
+    `kubectl delete`, `helm uninstall`, `aws s3 rm`, `rclone purge`, `restic forget`, `curl -X DELETE`,
+    `zfs destroy`, `lvremove`…) ;
   - celle qui détruit trop large, ou en sautant sa propre confirmation, est refusée
     (`terraform destroy -auto-approve`, `gcloud … delete --quiet`, `gcloud projects delete`,
-    `rm -rf /`, `git push --force` sur la branche principale…).
+    `rm -rf /`, `git push --force` sur la branche principale, `kubectl delete ns --all`, `az group delete`…).
 Les commandes sont aussi examinées dans `ssh … '…'`, `sh -c '…'`, `sudo …`, `docker exec …`.
 
 Pas de contournement prévu : pour l'arrêter, l'utilisateur désactive le plugin
@@ -28,7 +30,11 @@ SHELLS = {"sh", "bash", "zsh", "dash", "ash", "ksh"}
 # Suppression sous PowerShell (« rm » y est un alias de Remove-Item)
 SUPPRESSION_PS = {"remove-item", "ri", "rd", "del", "erase", "rmdir"}
 # Commandes examinées
-SURVEILLEES = TERRAFORM | DOCKER | {"gcloud", "gsutil", "bq", "git", "rm", "dd", "find", "wipefs"}
+# Kubernetes, stockage objet, sauvegarde, API web, volumes ZFS / LVM
+NUAGE = {"kubectl", "helm", "flux", "aws", "az", "rclone", "mc", "s3cmd", "restic"}
+HTTP = {"curl", "wget", "http", "https", "xh", "xhs"}
+VOLUMES = {"zfs", "zpool", "lvremove", "vgremove", "pvremove"}
+SURVEILLEES = TERRAFORM | DOCKER | NUAGE | HTTP | VOLUMES | {"gcloud", "gsutil", "bq", "git", "rm", "dd", "find", "wipefs"}
 # Commandes qui en lancent une autre sur place : la commande lancée est examinée comme si elle était seule
 LANCEURS_LOCAUX = {"sudo", "doas", "env", "timeout", "nice", "ionice", "nohup", "setsid", "exec", "time",
                    "command", "stdbuf", "xargs", "watch", "flock"}
@@ -38,6 +44,18 @@ MOTS_CLES = {"then", "do", "else", "elif", "if", "while", "until", "!", "{", "("
 # Branches dont l'historique ne se réécrit pas
 PRINCIPALE = re.compile(r"^(main|master)$")
 GCLOUD_LARGE = {"projects", "organizations", "folders"}
+# Options qui prennent une valeur (« -n prod ») : la valeur n'est pas le nom d'une sous-commande
+AVEC_VALEUR = {"-n", "--namespace", "--context", "--kube-context", "--kubeconfig", "--cluster", "--user", "-s", "--server",
+               "--as", "--as-group", "--token", "--request-timeout", "-l", "--selector", "-f", "--filename", "-o", "--output",
+               "--field-selector", "--grace-period", "--timeout", "-c", "--container", "-k", "--kustomize",
+               "--profile", "--region", "--endpoint-url", "--query", "--color", "--subscription", "-g", "--resource-group", "--name",
+               "-r", "--repo", "--repository-file", "-p", "--password-file", "--password-command", "--cache-dir",
+               "--config", "--include", "--exclude", "--filter", "--min-age", "--max-age", "--log-file", "--log-level",
+               "-a", "--auth", "--session"}
+# Kubernetes : types dont la suppression emporte des données ou tout un pan du cluster
+K_ESPACES = {"ns", "namespace", "namespaces"}
+K_VOLUMES = {"pv", "pvc", "persistentvolume", "persistentvolumes", "persistentvolumeclaim", "persistentvolumeclaims"}
+K_DEFINITIONS = {"crd", "crds", "customresourcedefinition", "customresourcedefinitions"}
 DOSSIER_PERSO = re.compile(r"(?i)^(~|\$HOME|\$\{HOME\}|\$env:(USERPROFILE|HOME))(?=/|$)")
 VARIABLE = re.compile(r"(?i)^\$(\{\w+\}|env:\w+|\w+)")
 # Commandes dont l'entrée « <<EOF » est elle-même une suite de commandes
@@ -303,6 +321,113 @@ def controle_docker(mot, args):
     return None
 
 
+def positionnels(args):
+    """Les arguments qui ne sont ni des options ni la valeur d'une option (« -n prod »)."""
+    res, saute = [], False
+    for a in args:
+        if saute:
+            saute = False
+            if not a.startswith("-"): continue
+        if a.startswith("-"):
+            saute = a in AVEC_VALEUR; continue
+        res.append(a)
+    return res
+
+
+def controle_kubectl(args):
+    pos = positionnels(args)
+    if pos[:1] != ["delete"]: return None
+    opts = [a for a in args if a.startswith("-")]
+    if any(re.match(r"^--dry-run(=(client|server|true))?$", o) for o in opts): return None
+    types = {t.split("/")[0].lower() for c in pos[1:2] for t in c.split(",")} | {
+        c.split("/")[0].lower() for c in pos[2:] if "/" in c}
+    tout, partout = "--all" in opts, any(o in ("-A", "--all-namespaces") for o in opts)
+    larges = types & (K_ESPACES | K_VOLUMES | K_DEFINITIONS)
+    cmd = "kubectl delete " + " ".join(pos[1:3])
+    if tout and (larges or partout):
+        return refus("« %s --all%s » supprime en bloc %s" % (cmd.strip(), " -A" if partout else "",
+                     "dans tous les espaces de noms" if partout and not larges else "des espaces de noms, des volumes ou des définitions de ressources"))
+    if types & K_ESPACES:
+        return demande("« %s » supprime l'espace de noms et tout ce qu'il contient, volumes compris" % cmd)
+    if types & K_VOLUMES:
+        return demande("« %s » supprime des volumes persistants : leurs données peuvent être perdues" % cmd)
+    if types & K_DEFINITIONS:
+        return demande("« %s » supprime une définition de ressource et toutes les ressources de ce type dans le cluster" % cmd)
+    return demande("« %s » supprime des ressources du cluster%s" % (cmd.strip(), " (--all : toutes celles de ce type)" if tout else ""))
+
+
+def controle_nuage(mot, args):
+    """helm, flux, aws, az, rclone, mc, s3cmd, restic : suppressions de ressources, d'objets ou de sauvegardes."""
+    pos = positionnels(args)
+    sub = pos[0] if pos else ""
+    opts = [a for a in args if a.startswith("-")]
+    # Essai à blanc : rien n'est supprimé (« -n » ne l'annonce que chez restic, rclone et s3cmd)
+    if any(o in ("--dry-run", "--dryrun") or o.startswith("--dry-run=") or (
+            o == "-n" and mot in ("restic", "rclone", "s3cmd")) for o in opts): return None
+    if mot == "helm" and sub in ("uninstall", "delete", "del", "un"):
+        return demande("« helm %s » supprime la version installée et les ressources qu'elle a créées" % " ".join(pos[:2]))
+    if mot == "flux" and sub in ("delete", "uninstall"):
+        return demande("« flux %s » supprime des objets Flux ; ce qu'ils géraient peut partir avec eux" % " ".join(pos[:3]))
+    if mot == "restic" and sub == "forget":
+        return demande("« restic forget » retire des instantanés de la sauvegarde" + (
+            " et, avec --prune, efface leurs données du dépôt" if "--prune" in opts else ""))
+    if mot == "restic" and sub == "prune":
+        return demande("« restic prune » efface du dépôt les données qui ne sont plus référencées : les instantanés oubliés deviennent irrécupérables")
+    if mot == "aws":
+        op = pos[1] if len(pos) > 1 else ""
+        if sub == "s3" and op in ("rm", "rb"):
+            return demande("« aws s3 %s » supprime %s, sans corbeille" % (op, "des objets du stockage" if op == "rm" else "un seau de stockage")
+                           + (" (--recursive : tout ce qui est sous ce préfixe)" if "--recursive" in opts else "")
+                           + (" (--force : avec tout son contenu)" if op == "rb" and "--force" in opts else ""))
+        if sub == "s3" and op == "sync" and "--delete" in opts:
+            return demande("« aws s3 sync --delete » supprime ce qui manque à la source")
+        if re.match(r"^(delete|terminate)-[a-z0-9-]+$", op):
+            return demande("« aws %s %s » supprime des ressources AWS" % (sub, op))
+    if mot == "az":
+        iv = next((k for k, a in enumerate(pos[:6]) if a == "delete" or a.startswith("delete-")), -1)
+        if iv < 0: return None
+        cmd = "az " + " ".join(pos[:iv + 1])
+        if iv == 1 and sub == "group": return refus("« %s » supprime un groupe de ressources entier" % cmd)
+        if any(o in ("--yes", "-y") for o in opts): return refus("« %s » avec --yes supprime sans aucune confirmation" % cmd)
+        return demande("« %s » supprime des ressources Azure" % cmd)
+    if mot == "rclone" and sub in ("delete", "deletefile", "purge", "rmdir", "rmdirs", "cleanup"):
+        return demande("« rclone %s » supprime des fichiers du stockage distant, sans corbeille" % sub)
+    if mot == "rclone" and sub == "sync":
+        return demande("« rclone sync » supprime de la destination ce qui manque à la source")
+    if mot in ("mc", "s3cmd") and sub in ("rm", "del", "rb"):
+        return demande("« %s %s » supprime %s, sans corbeille" % (mot, sub, "un seau de stockage" if sub == "rb" else "des objets du stockage"))
+    if (mot == "mc" and sub == "mirror" and "--remove" in opts) or (mot == "s3cmd" and sub == "sync" and "--delete-removed" in opts):
+        return demande("« %s %s » avec suppression efface de la destination ce qui manque à la source" % (mot, sub))
+    return None
+
+
+def controle_http(mot, args):
+    """Requête HTTP DELETE : elle supprime une ressource derrière l'API appelée."""
+    methode = None
+    if mot in ("curl", "wget"):
+        for k, a in enumerate(args):
+            m = (re.match(r"^-[a-zA-Z]*X(.*)$", a) if mot == "curl" else None) or re.match(
+                r"^--(?:request|method)(?:=(.*))?$", a)
+            if m: methode = m.group(1) or (args[k + 1] if k + 1 < len(args) else "")
+    else:
+        pos = positionnels(args)
+        methode = pos[0] if pos else None
+    if methode and methode.upper() == "DELETE":
+        return demande("« %s » envoie une requête DELETE : la ressource visée est supprimée" % mot)
+    return None
+
+
+def controle_volumes(mot, args):
+    pos = positionnels(args)
+    if mot in ("zfs", "zpool"):
+        if pos[:1] != ["destroy"] or any(re.match(r"^-[a-zA-Z]*n[a-zA-Z]*$", a) for a in args): return None
+        return demande("« %s destroy » détruit %s : son contenu est perdu" % (
+            mot, "le pool entier, avec tous ses jeux de données" if mot == "zpool" else "le jeu de données" +
+            (" et tout ce qui en dépend" if any(re.match(r"^-[a-zA-Z]*[rR]", a) for a in args) else "")))
+    return demande("« %s » supprime %s LVM : son contenu est perdu" % (
+        mot, {"lvremove": "un volume logique", "vgremove": "un groupe de volumes", "pvremove": "un volume physique"}[mot]))
+
+
 def git(rep, *args):
     try:
         r = subprocess.run(["git", "-C", rep] + list(args), capture_output=True, text=True, errors="replace", timeout=8)
@@ -355,6 +480,10 @@ def controle(mot, args, toks, ici):
     if mot == "rm" or (POWERSHELL[0] and mot in SUPPRESSION_PS): return controle_rm(mot, args)
     if mot == "find": return controle_find(args)
     if mot in DOCKER: return controle_docker(mot, args)
+    if mot == "kubectl": return controle_kubectl(args)
+    if mot in NUAGE: return controle_nuage(mot, args)
+    if mot in HTTP: return controle_http(mot, args)
+    if mot in VOLUMES: return controle_volumes(mot, args)
     return controle_disque(mot, args)
 
 

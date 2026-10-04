@@ -52,7 +52,7 @@ test('laisse passer le travail normal', { timeoutMs: 60000 }, async ($, on) => {
 })
 
 test('les règles personnelles ajoutent des refus et des demandes sans rien retirer', async ($, on) => {
-  monde(on, { regles: '# essai\nkubectl delete\nrefus: helm uninstall\n(règle invalide\n' })
+  monde(on, { regles: '# essai\n(psql|mysql).*(DROP|TRUNCATE)\nrefus: dropdb\n(règle invalide\n' })
   expect(await rates($, 'refus', CAS.refusPerso as Cas[])).toEqual([])
   expect(await rates($, 'demande', CAS.demandePerso as Cas[])).toEqual([])
   for (const voulu of ['refus', 'demande', 'passe'] as const) {

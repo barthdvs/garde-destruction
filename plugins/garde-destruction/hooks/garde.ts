@@ -18,7 +18,11 @@ const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ash', 'ksh'])
 // Suppression sous PowerShell (« rm » y est un alias de Remove-Item)
 const SUPPRESSION_PS = new Set(['remove-item', 'ri', 'rd', 'del', 'erase', 'rmdir'])
 // Commandes examinées
-const SURVEILLEES = new Set([...TERRAFORM, ...DOCKER, 'gcloud', 'gsutil', 'bq', 'git', 'rm', 'dd', 'find', 'wipefs'])
+// Kubernetes, stockage objet, sauvegarde, API web, volumes ZFS / LVM
+const NUAGE = new Set(['kubectl', 'helm', 'flux', 'aws', 'az', 'rclone', 'mc', 's3cmd', 'restic'])
+const HTTP = new Set(['curl', 'wget', 'http', 'https', 'xh', 'xhs'])
+const VOLUMES = new Set(['zfs', 'zpool', 'lvremove', 'vgremove', 'pvremove'])
+const SURVEILLEES = new Set([...TERRAFORM, ...DOCKER, ...NUAGE, ...HTTP, ...VOLUMES, 'gcloud', 'gsutil', 'bq', 'git', 'rm', 'dd', 'find', 'wipefs'])
 // Commandes qui en lancent une autre sur place : la commande lancée est examinée comme si elle était seule
 const LANCEURS_LOCAUX = new Set(['sudo', 'doas', 'env', 'timeout', 'nice', 'ionice', 'nohup', 'setsid', 'exec', 'time',
   'command', 'stdbuf', 'xargs', 'watch', 'flock'])
@@ -28,6 +32,18 @@ const MOTS_CLES = new Set(['then', 'do', 'else', 'elif', 'if', 'while', 'until',
 // Branches dont l'historique ne se réécrit pas
 const PRINCIPALE = /^(main|master)$/
 const GCLOUD_LARGE = new Set(['projects', 'organizations', 'folders'])
+// Options qui prennent une valeur (« -n prod ») : la valeur n'est pas le nom d'une sous-commande
+const AVEC_VALEUR = new Set(['-n', '--namespace', '--context', '--kube-context', '--kubeconfig', '--cluster', '--user', '-s', '--server',
+  '--as', '--as-group', '--token', '--request-timeout', '-l', '--selector', '-f', '--filename', '-o', '--output',
+  '--field-selector', '--grace-period', '--timeout', '-c', '--container', '-k', '--kustomize',
+  '--profile', '--region', '--endpoint-url', '--query', '--color', '--subscription', '-g', '--resource-group', '--name',
+  '-r', '--repo', '--repository-file', '-p', '--password-file', '--password-command', '--cache-dir',
+  '--config', '--include', '--exclude', '--filter', '--min-age', '--max-age', '--log-file', '--log-level',
+  '-a', '--auth', '--session'])
+// Kubernetes : types dont la suppression emporte des données ou tout un pan du cluster
+const K_ESPACES = new Set(['ns', 'namespace', 'namespaces'])
+const K_VOLUMES = new Set(['pv', 'pvc', 'persistentvolume', 'persistentvolumes', 'persistentvolumeclaim', 'persistentvolumeclaims'])
+const K_DEFINITIONS = new Set(['crd', 'crds', 'customresourcedefinition', 'customresourcedefinitions'])
 const DOSSIER_PERSO = /^(~|\$HOME|\$\{HOME\}|\$env:(USERPROFILE|HOME))(?=\/|$)/i
 const VARIABLE = /^\$(\{\w+\}|env:\w+|\w+)/i
 // Commandes dont l'entrée « <<EOF » est elle-même une suite de commandes
@@ -307,6 +323,120 @@ function controleDocker(mot: string, args: string[]): Verdict | undefined {
   return undefined
 }
 
+/** Les arguments qui ne sont ni des options ni la valeur d'une option (« -n prod »). */
+function positionnels(args: string[]): string[] {
+  const res: string[] = []
+  let saute = false
+  for (const a of args) {
+    if (saute) {
+      saute = false
+      if (!a.startsWith('-')) continue
+    }
+    if (a.startsWith('-')) { saute = AVEC_VALEUR.has(a); continue }
+    res.push(a)
+  }
+  return res
+}
+
+function controleKubectl(args: string[]): Verdict | undefined {
+  const pos = positionnels(args)
+  if (pos[0] !== 'delete') return undefined
+  const opts = args.filter(a => a.startsWith('-'))
+  if (opts.some(o => /^--dry-run(=(client|server|true))?$/.test(o))) return undefined
+  const types = new Set([
+    ...pos.slice(1, 2).flatMap(c => c.split(',')).map(t => (t.split('/')[0] ?? '').toLowerCase()),
+    ...pos.slice(2).filter(c => c.includes('/')).map(c => (c.split('/')[0] ?? '').toLowerCase()),
+  ])
+  const tout = opts.includes('--all'), partout = opts.some(o => o === '-A' || o === '--all-namespaces')
+  const a = (ens: Set<string>) => [...types].some(t => ens.has(t))
+  const larges = a(K_ESPACES) || a(K_VOLUMES) || a(K_DEFINITIONS)
+  const cmd = `kubectl delete ${pos.slice(1, 3).join(' ')}`
+  if (tout && (larges || partout)) {
+    return refus(`« ${cmd.trim()} --all${partout ? ' -A' : ''} » supprime en bloc ` +
+      (partout && !larges ? 'dans tous les espaces de noms' : 'des espaces de noms, des volumes ou des définitions de ressources'))
+  }
+  if (a(K_ESPACES)) return demande(`« ${cmd} » supprime l'espace de noms et tout ce qu'il contient, volumes compris`)
+  if (a(K_VOLUMES)) return demande(`« ${cmd} » supprime des volumes persistants : leurs données peuvent être perdues`)
+  if (a(K_DEFINITIONS)) return demande(`« ${cmd} » supprime une définition de ressource et toutes les ressources de ce type dans le cluster`)
+  return demande(`« ${cmd.trim()} » supprime des ressources du cluster${tout ? ' (--all : toutes celles de ce type)' : ''}`)
+}
+
+/** helm, flux, aws, az, rclone, mc, s3cmd, restic : suppressions de ressources, d'objets ou de sauvegardes. */
+function controleNuage(mot: string, args: string[]): Verdict | undefined {
+  const pos = positionnels(args)
+  const sub = pos[0] ?? ''
+  const opts = args.filter(a => a.startsWith('-'))
+  // Essai à blanc : rien n'est supprimé (« -n » ne l'annonce que chez restic, rclone et s3cmd)
+  if (opts.some(o => o === '--dry-run' || o === '--dryrun' || o.startsWith('--dry-run=') ||
+    (o === '-n' && ['restic', 'rclone', 's3cmd'].includes(mot)))) return undefined
+  if (mot === 'helm' && ['uninstall', 'delete', 'del', 'un'].includes(sub)) {
+    return demande(`« helm ${pos.slice(0, 2).join(' ')} » supprime la version installée et les ressources qu'elle a créées`)
+  }
+  if (mot === 'flux' && (sub === 'delete' || sub === 'uninstall')) {
+    return demande(`« flux ${pos.slice(0, 3).join(' ')} » supprime des objets Flux ; ce qu'ils géraient peut partir avec eux`)
+  }
+  if (mot === 'restic' && sub === 'forget') {
+    return demande('« restic forget » retire des instantanés de la sauvegarde' + (opts.includes('--prune') ? ' et, avec --prune, efface leurs données du dépôt' : ''))
+  }
+  if (mot === 'restic' && sub === 'prune') {
+    return demande('« restic prune » efface du dépôt les données qui ne sont plus référencées : les instantanés oubliés deviennent irrécupérables')
+  }
+  if (mot === 'aws') {
+    const op = pos[1] ?? ''
+    if (sub === 's3' && (op === 'rm' || op === 'rb')) {
+      return demande(`« aws s3 ${op} » supprime ${op === 'rm' ? 'des objets du stockage' : 'un seau de stockage'}, sans corbeille` +
+        (opts.includes('--recursive') ? ' (--recursive : tout ce qui est sous ce préfixe)' : '') +
+        (op === 'rb' && opts.includes('--force') ? ' (--force : avec tout son contenu)' : ''))
+    }
+    if (sub === 's3' && op === 'sync' && opts.includes('--delete')) return demande('« aws s3 sync --delete » supprime ce qui manque à la source')
+    if (/^(delete|terminate)-[a-z0-9-]+$/.test(op)) return demande(`« aws ${sub} ${op} » supprime des ressources AWS`)
+  }
+  if (mot === 'az') {
+    const iv = pos.slice(0, 6).findIndex(a => a === 'delete' || a.startsWith('delete-'))
+    if (iv < 0) return undefined
+    const cmd = `az ${pos.slice(0, iv + 1).join(' ')}`
+    if (iv === 1 && sub === 'group') return refus(`« ${cmd} » supprime un groupe de ressources entier`)
+    if (opts.some(o => o === '--yes' || o === '-y')) return refus(`« ${cmd} » avec --yes supprime sans aucune confirmation`)
+    return demande(`« ${cmd} » supprime des ressources Azure`)
+  }
+  if (mot === 'rclone' && ['delete', 'deletefile', 'purge', 'rmdir', 'rmdirs', 'cleanup'].includes(sub)) {
+    return demande(`« rclone ${sub} » supprime des fichiers du stockage distant, sans corbeille`)
+  }
+  if (mot === 'rclone' && sub === 'sync') return demande('« rclone sync » supprime de la destination ce qui manque à la source')
+  if ((mot === 'mc' || mot === 's3cmd') && ['rm', 'del', 'rb'].includes(sub)) {
+    return demande(`« ${mot} ${sub} » supprime ${sub === 'rb' ? 'un seau de stockage' : 'des objets du stockage'}, sans corbeille`)
+  }
+  if ((mot === 'mc' && sub === 'mirror' && opts.includes('--remove')) || (mot === 's3cmd' && sub === 'sync' && opts.includes('--delete-removed'))) {
+    return demande(`« ${mot} ${sub} » avec suppression efface de la destination ce qui manque à la source`)
+  }
+  return undefined
+}
+
+/** Requête HTTP DELETE : elle supprime une ressource derrière l'API appelée. */
+function controleHttp(mot: string, args: string[]): Verdict | undefined {
+  let methode: string | undefined
+  if (mot === 'curl' || mot === 'wget') {
+    args.forEach((a, k) => {
+      const m = (mot === 'curl' ? /^-[a-zA-Z]*X(.*)$/.exec(a) : null) ?? /^--(?:request|method)(?:=(.*))?$/.exec(a)
+      if (m !== null) methode = m[1] || (args[k + 1] ?? '')
+    })
+  } else {
+    methode = positionnels(args)[0]
+  }
+  return methode?.toUpperCase() === 'DELETE' ? demande(`« ${mot} » envoie une requête DELETE : la ressource visée est supprimée`) : undefined
+}
+
+function controleVolumes(mot: string, args: string[]): Verdict | undefined {
+  if (mot === 'zfs' || mot === 'zpool') {
+    if (positionnels(args)[0] !== 'destroy' || args.some(a => /^-[a-zA-Z]*n[a-zA-Z]*$/.test(a))) return undefined
+    const quoi = mot === 'zpool' ? 'le pool entier, avec tous ses jeux de données'
+      : 'le jeu de données' + (args.some(a => /^-[a-zA-Z]*[rR]/.test(a)) ? ' et tout ce qui en dépend' : '')
+    return demande(`« ${mot} destroy » détruit ${quoi} : son contenu est perdu`)
+  }
+  const quoi = mot === 'lvremove' ? 'un volume logique' : mot === 'vgremove' ? 'un groupe de volumes' : 'un volume physique'
+  return demande(`« ${mot} » supprime ${quoi} LVM : son contenu est perdu`)
+}
+
 async function git($: EngineInterface, rep: string, args: string[]): Promise<string> {
   try {
     const r = await $.process.run(['git', '-C', rep, ...args], { timeoutMs: 8000 })
@@ -363,6 +493,10 @@ async function controle($: EngineInterface, ctx: Contexte, mot: string, args: st
   if (mot === 'rm' || (ctx.powershell && SUPPRESSION_PS.has(mot))) return controleRm(mot, args, ctx.powershell)
   if (mot === 'find') return controleFind(args)
   if (DOCKER.has(mot)) return controleDocker(mot, args)
+  if (mot === 'kubectl') return controleKubectl(args)
+  if (NUAGE.has(mot)) return controleNuage(mot, args)
+  if (HTTP.has(mot)) return controleHttp(mot, args)
+  if (VOLUMES.has(mot)) return controleVolumes(mot, args)
   return controleDisque(mot, args)
 }
 

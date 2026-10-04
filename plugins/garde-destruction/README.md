@@ -43,7 +43,12 @@ aucune commande n'y est exécutée.
 | Google Cloud | `gcloud … delete`, `gcloud … destroy`, `gcloud storage rm`, `remove-iam-policy-binding`, `gsutil rm`, `gsutil rb`, `gsutil rsync -d`, `bq rm` |
 | Git | `push --force` et `--force-with-lease`, `push --delete`, `reset --hard`, `clean -f`, `branch -D`, `stash clear` |
 | Docker / Podman | `system prune`, `volume rm`, `volume prune`, `container prune`, `image prune -a`, `compose down -v` |
-| Fichiers et disques | `rm -r` sur un dossier large (`.`, `*`, `~/projets`, `/home/moi`, `"$DOSSIER"/`, `.git`), `find … -delete` sur un chemin large, `dd of=/dev/…`, `mkfs`, `wipefs -a` |
+| Kubernetes | `kubectl delete` (message renforcé pour `namespace`, `pv`, `pvc`, `crd`), `helm uninstall`, `flux delete`, `flux uninstall` |
+| AWS / Azure | `aws s3 rm`, `aws s3 rb`, `aws s3 sync --delete`, `aws … delete-*` / `terminate-*` (`s3api delete-bucket`, `ec2 terminate-instances`…), `az … delete` |
+| Stockage objet et distant | `rclone delete`, `deletefile`, `purge`, `rmdir(s)`, `cleanup`, `rclone sync` (il supprime ce qui manque à la source), `mc rm`, `mc rb`, `mc mirror --remove`, `s3cmd del`/`rm`/`rb`, `s3cmd sync --delete-removed` |
+| Sauvegardes | `restic forget` (avec ou sans `--prune`), `restic prune` |
+| API web | requête `DELETE` : `curl -X DELETE`, `curl --request DELETE`, `wget --method=DELETE`, `http DELETE …` (HTTPie, xh) |
+| Fichiers et disques | `rm -r` sur un dossier large (`.`, `*`, `~/projets`, `/home/moi`, `"$DOSSIER"/`, `.git`), `find … -delete` sur un chemin large, `dd of=/dev/…`, `mkfs`, `wipefs -a`, `zfs destroy`, `zpool destroy`, `lvremove`, `vgremove`, `pvremove` |
 
 Le motif nomme la commande et sa cible, par exemple :
 `garde-destruction : « gcloud sql instances delete base-prod » supprime des ressources Google Cloud.`
@@ -53,7 +58,8 @@ Le motif nomme la commande et sa cible, par exemple :
 | Situation | Exemples |
 |---|---|
 | La commande saute sa propre confirmation | `terraform destroy -auto-approve`, `terraform apply -destroy -auto-approve`, `gcloud … delete --quiet`, `bq rm -f` |
-| Elle vise trop large | `gcloud projects delete`, `rm -rf /`, `rm -rf ~`, `rm -rf /etc`, `rm -rf --no-preserve-root` |
+| La commande saute sa propre confirmation (Azure) | `az … delete --yes` |
+| Elle vise trop large | `gcloud projects delete`, `az group delete`, `kubectl delete ns --all` (de même `pv`, `pvc`, `crd` avec `--all`), `kubectl delete … --all -A`, `rm -rf /`, `rm -rf ~`, `rm -rf /etc`, `rm -rf --no-preserve-root` |
 | Elle réécrit ou supprime la branche principale | `git push --force` vers `main` ou `master` (nommée, ou branche courante), `git push --delete main` |
 
 Claude reçoit alors la consigne de ne pas contourner le refus et de te dire ce qui a été refusé.
@@ -66,6 +72,11 @@ Si tu veux vraiment l'opération, lance-la toi-même dans ton terminal.
 - Git courant : `push`, `push -u`, `reset --soft`, `clean -n`, `branch -d`, `stash`, `commit`.
 - Docker courant : `ps`, `up`, `compose down` sans `-v`, `rm -f <conteneur>`, `image prune -f`, `builder prune`.
 - Suppressions ordinaires : `rm fichier`, `rm -rf node_modules`, `rm -rf build/`, `rm -rf /tmp/essai`, `rm -rf "$tmp"`.
+- Kubernetes en lecture ou en déploiement : `kubectl get`, `describe`, `logs`, `apply`, `exec`, `kubectl delete --dry-run=…`, `helm list`, `helm upgrade --install`, `flux get`, `flux reconcile`.
+- Stockage et sauvegardes : `aws s3 ls`, `aws s3 cp`, `aws s3 sync` sans `--delete`, `rclone copy`, `rclone ls`, `mc cp`, `mc mirror` sans `--remove`, `restic snapshots`, `backup`, `check`.
+- Les essais à blanc : `--dry-run`, `--dryrun`, `restic … -n`, `rclone … -n`, `zfs destroy -n`.
+- Les autres requêtes web (`curl`, `curl -X POST`, `http GET`…), `zfs list`, `zfs snapshot`, `lvcreate`.
+- Arrêter un service ou un conteneur (`systemctl stop`, `docker rm -f`) : rien n'y est perdu, ce n'est pas le rôle de ce garde.
 
 Les commandes sont examinées aussi quand elles sont enveloppées : `sudo …`, `ssh hôte '…'`, `sh -c '…'`,
 `docker exec … `, `timeout …`, `if …; then …; fi`, `$( … )`.
@@ -86,12 +97,11 @@ Crée `~/.config/garde-destruction/regles.txt`, une expression régulière par l
 Sans préfixe, la commande reconnue t'est soumise ; avec `refus:`, elle est refusée :
 
 ```
-# Kubernetes
-kubectl delete
-helm uninstall
-refus: kubectl delete (ns|namespace)
 # bases de données
 (psql|mysql).*\b(DROP|TRUNCATE)\b
+refus: dropdb
+# tout espace de noms Kubernetes, même seul
+refus: kubectl delete (ns|namespace)
 ```
 
 Chaque règle est comparée à chaque commande simple (`outil argument argument…`, guillemets retirés).
@@ -112,8 +122,10 @@ l'opération toi-même dans ton terminal : tes commandes à toi ne sont pas cont
   agent en arrière-plan), une commande soumise à confirmation n'est pas exécutée. Dans un mode où ce n'est
   pas toi qui réponds aux demandes de permission (mode automatique), vérifie qui tranche : fais l'essai du
   paragraphe « Vérifier que ça marche ». Les refus, eux, ne dépendent pas du mode.
-- La première version couvre Terraform, Google Cloud, Git, Docker et les suppressions de fichiers. AWS, Azure,
-  Kubernetes et les bases de données ne sont pas couverts : ajoute-les par tes propres règles en attendant.
+- Sont couverts Terraform, Google Cloud, AWS (stockage S3 et opérations `delete-*` / `terminate-*`), Azure (`delete`),
+  Kubernetes, Helm, Flux, Git, Docker, rclone, MinIO (`mc`), s3cmd, restic, les requêtes HTTP `DELETE`, ZFS, LVM
+  et les suppressions de fichiers. Les bases de données (`DROP`, `TRUNCATE`…) ne le sont pas : ajoute-les par tes propres règles.
+- Une requête `DELETE` envoyée autrement que par `curl`, `wget` ou HTTPie (script, client d'API) n'est pas vue.
 - Le module intégré s'appuie sur une interface de Claude Code encore en accès anticipé : elle peut changer
   d'une version à l'autre. Sur une version qui ne le charge pas, seul le secours Python protège ; sans
   Python non plus, le plugin ne retient rien. D'où la vérification ci-dessus, à refaire après une grosse mise à jour.
